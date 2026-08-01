@@ -18,6 +18,7 @@ local.properties
 *.aab
 *.jks
 *.keystore
+*.p12
 keystore.properties
 google-services.json
 /qa

@@ -238,6 +238,20 @@ APK 位于：
 app/build/outputs/apk/debug/app-debug.apk
 ```
 
+### 8.1 构建签名 Release APK
+
+发布签名通过环境变量传给 Gradle，避免把密钥路径或密码写入源码：
+
+```bash
+SMS_RELAY_STORE_FILE=/absolute/path/sms-relay-release.p12 \
+SMS_RELAY_STORE_PASSWORD=your_store_password \
+SMS_RELAY_KEY_ALIAS=sms-relay \
+SMS_RELAY_KEY_PASSWORD=your_key_password \
+./gradlew assembleRelease
+```
+
+产物位于 `app/build/outputs/apk/release/app-release.apk`。签名文件必须安全、长期备份；丢失原签名后，已经安装的应用将无法通过新 APK 原位升级。签名文件、密码和 Release APK 都已由仓库 `.gitignore` 排除，安装包应通过 GitHub Releases 等发布渠道分发。
+
 首次测试步骤：
 
 1. 安装并启动应用。

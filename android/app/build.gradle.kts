@@ -17,6 +17,18 @@ fun configString(name: String): String =
         .replace("\\", "\\\\")
         .replace("\"", "\\\"")
 
+// Release credentials come from the environment so signing secrets never enter Git.
+val releaseStoreFile = providers.environmentVariable("SMS_RELAY_STORE_FILE")
+val releaseStorePassword = providers.environmentVariable("SMS_RELAY_STORE_PASSWORD")
+val releaseKeyAlias = providers.environmentVariable("SMS_RELAY_KEY_ALIAS")
+val releaseKeyPassword = providers.environmentVariable("SMS_RELAY_KEY_PASSWORD")
+val hasReleaseSigning = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { it.isPresent }
+
 android {
     namespace = "com.example.smsrelay"
     compileSdk = 36
@@ -30,8 +42,22 @@ android {
         buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"${configString("SUPABASE_PUBLISHABLE_KEY")}\"")
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseStoreFile.get())
+                storePassword = releaseStorePassword.get()
+                keyAlias = releaseKeyAlias.get()
+                keyPassword = releaseKeyPassword.get()
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
