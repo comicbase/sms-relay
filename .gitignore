@@ -1,0 +1,35 @@
+# Operating system and IDE files
+.DS_Store
+.idea/
+*.iml
+
+# Android local and generated files
+android/.gradle/
+android/**/build/
+android/local.properties
+android/supabase.properties
+android/captures/
+android/.externalNativeBuild/
+android/.cxx/
+*.apk
+*.aab
+*.jks
+*.keystore
+keystore.properties
+google-services.json
+
+# Web local and generated files
+web/node_modules/
+web/dist/
+web/.vercel/
+web/.env.local
+web/.env.*.local
+
+# Local QA artifacts may contain real SMS content
+qa/
+android/qa/
+*.log
+*.db
+*.sqlite
+*.sqlite3
+

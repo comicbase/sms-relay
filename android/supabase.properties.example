@@ -1,0 +1,4 @@
+# Copy this file to supabase.properties and fill in your own project values.
+# Never put a service_role key, secret key, database password, or user password here.
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_key
