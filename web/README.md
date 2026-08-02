@@ -196,6 +196,22 @@ npx vercel --prod
 
 如果使用构建时环境变量，应在 Vercel Project Settings → Environment Variables 中配置同名变量，再重新部署。
 
+### 11.1 部署到腾讯云 EdgeOne Makers
+
+EdgeOne Pages 已升级为 EdgeOne Makers。这个项目也可以通过官方 CLI 直接部署，无需购买 Lighthouse 服务器：
+
+```bash
+npm install -g edgeone
+edgeone login
+npm ci
+npm run build
+edgeone makers deploy dist -n sms-relay -e production -a overseas
+```
+
+`overseas` 表示使用中国内地以外的边缘区域，适合主要从日本访问的场景。直接上传模式不会自动连接 GitHub；代码更新后需要重新构建并执行部署命令。如果希望每次推送后自动部署，可以在 Makers 控制台改用 Git 仓库项目。
+
+当前示例部署地址：<https://sms-relay-lxncf4wd.edgeone.dev/>
+
 ## 12. 初学者代码导读
 
 ### `useState`
