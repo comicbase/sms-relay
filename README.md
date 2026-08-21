@@ -39,6 +39,8 @@ React 远程管理网页
 4. 将 `web/.env.example` 复制为 `web/.env.local`，填写相同的公开客户端配置。
 5. 启动网页，使用普通 Supabase Auth 用户登录。
 
+网页也可以通过 Synology Web Station 部署到 NAS，详细步骤见网页项目文档。
+
 ## 特别注意
 
 - 应用接收的是运营商传统 SMS。小米等手机启用“免费网络短信”“5G 消息”或 RCS 后，消息可能不会触发标准的 `SMS_RECEIVED` 广播；测试时可先关闭这些功能。
@@ -54,4 +56,3 @@ React 远程管理网页
 ## License
 
 本项目使用 [MIT License](LICENSE)。
-
