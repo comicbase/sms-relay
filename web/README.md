@@ -1,6 +1,6 @@
 # 短信中继台 Web 教学案例
 
-这是 SmsRelay Android 案例配套的远程查看网页。用户通过 Supabase Auth 登录后，浏览器直接查询 `sms_messages` 和 `devices`，并使用 Supabase Realtime 订阅新短信。项目部署在 Vercel，不需要自建 Web 服务器。
+这是 SmsRelay Android 案例配套的远程查看网页。用户通过 Supabase Auth 登录后，浏览器直接查询 `sms_messages` 和 `devices`，并使用 Supabase Realtime 订阅新短信。项目可部署到 Vercel、EdgeOne 或 Synology Web Station。
 
 线上示例：[https://sms-relay-web-liard.vercel.app](https://sms-relay-web-liard.vercel.app)
 
@@ -211,6 +211,20 @@ edgeone makers deploy dist -n sms-relay -e production -a overseas
 `overseas` 表示使用中国内地以外的边缘区域，适合主要从日本访问的场景。直接上传模式不会自动连接 GitHub；代码更新后需要重新构建并执行部署命令。如果希望每次推送后自动部署，可以在 Makers 控制台改用 Git 仓库项目。
 
 当前示例部署地址：<https://sms-relay-lxncf4wd.edgeone.dev/>
+
+### 11.2 通过 Synology Web Station 部署静态成品
+
+本项目构建后只有 HTML、CSS 和 JavaScript，可以直接由 Web Station 托管。
+
+1. 在开发电脑的 `web` 目录执行 `npm ci && npm run build`。
+2. 在 NAS 的 `web` 共享文件夹中新建 `sms-relay`，把 `dist` 内部的 `index.html` 和 `assets` 上传到该目录。不要再多套一层 `dist` 目录。
+3. 给 DSM 内部系统群组 `http` 授予该目录的只读权限。
+4. 打开 **Web Station → 网页服务 → 新增 → 静态网站**，文档根目录选择 `web/sms-relay`，HTTP 后端选择 Nginx。
+5. 打开 **Web Station → 网页门户 → 新增 → 网页服务门户**，选择刚创建的服务。
+6. 局域网测试可选择“基于端口”，例如 HTTP `8081`，然后访问 `http://NAS局域网IP:8081/`。
+7. 正式使用可选择“基于名称”，填写独立域名并启用 HTTPS；证书分配在 **控制面板 → 安全性 → 证书 → 设置** 中完成。
+
+Vite 构建的资源地址从站点根路径 `/assets/` 开始，因此应使用独立域名或独立端口访问，不要把项目放到 `http://NAS地址/sms-relay/` 这样的子路径下。首次打开网页时仍需填写 Supabase Project URL 和 Publishable Key。
 
 ## 12. 初学者代码导读
 
