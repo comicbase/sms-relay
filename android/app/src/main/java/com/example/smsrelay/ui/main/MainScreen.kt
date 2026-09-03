@@ -15,7 +15,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -32,6 +35,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -41,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.smsrelay.data.local.SmsEntity
+import com.example.smsrelay.data.SimNumbers
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -52,6 +57,7 @@ fun MainScreen(viewModel: SmsRelayViewModel) {
     // lifecycle-aware 收集会在页面不可见时自动暂停，避免无意义地持续观察 UI 状态。
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    var showSimSettings by rememberSaveable { mutableStateOf(false) }
     var hasSmsPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) ==
@@ -67,7 +73,12 @@ fun MainScreen(viewModel: SmsRelayViewModel) {
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("短信中继 MVP") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("短信中继 MVP") },
+                actions = { TextButton(onClick = { showSimSettings = true }) { Text("SIM 号码") } },
+            )
+        },
     ) { padding ->
         Column(
             modifier = Modifier
@@ -129,6 +140,43 @@ fun MainScreen(viewModel: SmsRelayViewModel) {
             }
         }
     }
+    if (showSimSettings) {
+        SimNumbersDialog(
+            initial = state.simNumbers,
+            onSave = { viewModel.saveSimNumbers(it); showSimSettings = false },
+            onDismiss = { showSimSettings = false },
+        )
+    }
+}
+
+@Composable
+private fun SimNumbersDialog(initial: SimNumbers, onSave: (SimNumbers) -> Unit, onDismiss: () -> Unit) {
+    var sim1 by rememberSaveable { mutableStateOf(initial.sim1) }
+    var sim2 by rememberSaveable { mutableStateOf(initial.sim2) }
+    val numbers = SimNumbers(sim1, sim2)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("接收 SIM 手机号") },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("按系统设置中的卡槽填写，单卡只填实际使用的卡槽。换卡或更换卡槽后请更新。")
+                OutlinedTextField(
+                    value = sim1, onValueChange = { sim1 = it }, label = { Text("SIM 1 手机号") },
+                    singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = sim2, onValueChange = { sim2 = it }, label = { Text("SIM 2 手机号") },
+                    singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text("可带 + 区号；留空表示未配置。仅影响之后收到的短信；无法识别卡槽时不会猜测号码。")
+                if (!numbers.isValid()) Text("请输入 3–15 位数字，可带 +，不要带空格或横线。", color = MaterialTheme.colorScheme.error)
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(numbers) }, enabled = numbers.isValid()) { Text("保存") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }
 
 @Composable
@@ -275,6 +323,11 @@ private fun MessageCard(message: SmsEntity) {
                 )
             }
             Text(formatter.format(Instant.ofEpochMilli(message.receivedAt)))
+            Text(
+                "接收号码：${message.recipient ?: "未记录"}" +
+                    (message.simSlot?.let { " · SIM ${it + 1}" } ?: " · 卡槽未知"),
+                style = MaterialTheme.typography.bodySmall,
+            )
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
             Text(message.body)
             message.lastUploadError?.takeIf { it.isNotBlank() }?.let {

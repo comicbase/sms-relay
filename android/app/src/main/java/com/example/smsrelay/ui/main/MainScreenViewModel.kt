@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.smsrelay.AppContainer
+import com.example.smsrelay.data.SimNumbers
 import com.example.smsrelay.data.local.SmsEntity
 import com.example.smsrelay.worker.UploadScheduler
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,6 +20,7 @@ data class MainUiState(
     val isBusy: Boolean = false,
     val messages: List<SmsEntity> = emptyList(),
     val status: String? = null,
+    val simNumbers: SimNumbers = SimNumbers(),
 )
 
 /** 把登录、配置和同步操作连接到 UI 状态。 */
@@ -27,6 +29,7 @@ class SmsRelayViewModel(private val container: AppContainer) : ViewModel() {
         MainUiState(
             isConfigured = container.supabase.isConfigured,
             isSignedIn = container.sessionStore.get() != null,
+            simNumbers = container.simNumberStore.get(),
         ),
     )
     val state: StateFlow<MainUiState> = mutableState.asStateFlow()
@@ -60,6 +63,17 @@ class SmsRelayViewModel(private val container: AppContainer) : ViewModel() {
                     it.copy(isBusy = false, status = error.message ?: "登录失败")
                 }
             }
+        }
+    }
+
+    fun saveSimNumbers(numbers: SimNumbers) {
+        if (!numbers.isValid()) {
+            mutableState.update { it.copy(status = "手机号须为 3–15 位数字，可带 + 区号，或留空") }
+            return
+        }
+        container.simNumberStore.save(numbers)
+        mutableState.update {
+            it.copy(simNumbers = container.simNumberStore.get(), status = "SIM 号码已保存，仅对之后收到的短信生效")
         }
     }
 

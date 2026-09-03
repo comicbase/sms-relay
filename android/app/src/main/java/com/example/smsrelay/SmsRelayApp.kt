@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Build
 import com.example.smsrelay.data.DeviceIdentity
 import com.example.smsrelay.data.ConfigStore
+import com.example.smsrelay.data.SimNumberStore
 import com.example.smsrelay.data.local.SmsDatabase
 import com.example.smsrelay.data.remote.SupabaseClient
 import com.example.smsrelay.data.session.SessionStore
@@ -35,6 +36,7 @@ class AppContainer(context: Context) {
     val database = SmsDatabase.get(appContext)
     val sessionStore = SessionStore(appContext)
     val configStore = ConfigStore(appContext)
+    val simNumberStore = SimNumberStore(appContext)
     val deviceIdentity = DeviceIdentity(appContext)
     val deviceName: String = "${Build.MANUFACTURER} ${Build.MODEL}".trim()
     // 每次读取都根据最新配置创建客户端，因此在设置页保存 URL 后无需重启应用。

@@ -23,6 +23,7 @@
 - Supabase Auth 邮箱密码登录与持久化会话。
 - 查询最近 500 条短信。
 - 按号码、正文或设备名称搜索。
+- 显示并搜索接收号码 `recipient`（由 Android 在收到短信时按 SIM 配置保存）。
 - 按 Android 设备筛选。
 - 按日本标准时间（JST）分组和显示。
 - 实时刷新新增短信。
@@ -127,6 +128,10 @@ VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_key
 Vite 中以 `VITE_` 开头的变量会进入浏览器构建产物，因此只能放公开配置。不要在这里填写 `service_role`、Secret Key、数据库密码或 Auth 用户密码。
 
 ## 8. 开启 Realtime
+
+接收号码功能需先执行 [Supabase 迁移 SQL](../supabase/migrations/20260903_add_sms_recipient.sql)，并在新版 Android App 的 **SIM 号码** 中配置对应卡槽。旧短信、未配置号码或未知卡槽会显示“未记录”。网页兼容旧记录中缺少 `recipient` 的情况，不会根据设备当前配置倒填历史接收号码。
+
+本地 UI 测试：运行 `npm run dev -- --host 127.0.0.1` 后访问 `/tests/recipient-preview.html`。该页面复用实际 Dashboard，使用虚构的双卡、缺失字段和 NULL 记录，不连接 Supabase；可检查接收号码搜索、列表和详情。默认生产构建不会包含此测试页面。
 
 在 Supabase Dashboard 中：
 

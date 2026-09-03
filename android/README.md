@@ -31,6 +31,20 @@ SmsRelay 是一个面向 Android 初学者的完整案例：手机收到新短�
 
 本应用不需要成为系统默认短信应用，也不会读取安装前的短信收件箱。
 
+### 接收号码设置与升级
+
+1. 已有 Supabase 项目先在 SQL Editor 执行 [recipient 迁移](../supabase/migrations/20260903_add_sms_recipient.sql)，新增可空的 `sms_messages.recipient` 列；不改动原有 RLS。
+2. 安装新版 App（正式版升级须使用原来的签名），本地 Room 会从 v1 自动迁移到 v2，保留旧短信和上传队列。不要卸载旧版或清除数据。
+3. 点击 App 右上角 **SIM 号码**，按照系统 SIM 管理中的卡槽填写 SIM 1 / SIM 2 的手机号。单卡只填实际使用的卡槽，不使用的卡槽留空。
+4. 号码格式为 3–15 位数字，可带 `+` 国际区号，不带空格或横线。此设置无需额外的读取电话号码权限，也不会自动验证号码属于该卡。
+5. 新短信按广播中的卡槽匹配号码，并在接收时保存快照。以后修改号码、换卡或补传离线短信都不会改变旧记录的 `recipient`。
+
+卡槽使用零基索引（`0` 对应 SIM 1、`1` 对应 SIM 2），优先读取标准 `android.telephony.extra.SLOT_INDEX`，兼容旧 `slot` 字段。卡槽缺失、不支持或号码未填写时保存 `NULL`，不猜测号码。换卡、移动卡槽或切换 eSIM 后须手动更新配置。当前界面支持两个逻辑卡槽。
+
+旧短信接收时没有号码快照，因此升级后仍为空，在 App 和网页显示“未记录”。先迁移云端表再升级 App；若遗漏迁移，含 `recipient` 的上传会失败，但本地短信仍保留，完成迁移后点击“立即同步”补传。
+
+验收建议：分别向两张 SIM 发送测试短信，核对本机与 Supabase 的 `sim_slot` 和 `recipient`；断网接收后改配置再联网，确认补传仍使用接收时的旧号码。网页列表、详情和搜索都支持接收号码。
+
 ## 3. 整体架构
 
 ```mermaid
@@ -156,6 +170,7 @@ create table public.sms_messages (
   device_id uuid not null references public.devices(id) on delete cascade,
   client_message_id text not null,
   sender text not null,
+  recipient text,
   body text not null,
   received_at timestamptz not null,
   subscription_id integer,

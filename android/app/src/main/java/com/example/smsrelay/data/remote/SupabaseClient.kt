@@ -56,6 +56,7 @@ class SupabaseClient(
             .put("body", message.body)
             .put("received_at", Instant.ofEpochMilli(message.receivedAt).toString())
             .apply {
+                message.recipient?.let { put("recipient", it) }
                 message.subscriptionId?.let { put("subscription_id", it) }
                 message.simSlot?.let { put("sim_slot", it) }
             }

@@ -23,6 +23,8 @@ data class SmsEntity(
     val receivedAt: Long,
     val subscriptionId: Int?,
     val simSlot: Int?,
+    // 接收时的号码快照；修改 SIM 配置不会改写历史短信。
+    val recipient: String? = null,
     val uploadedAt: Long? = null,
     val lastUploadError: String? = null,
 )

@@ -24,6 +24,9 @@ class SmsReceiver : BroadcastReceiver() {
         if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
         val pendingResult = goAsync()
         val appContext = context.applicationContext
+        val app = SmsRelayApp.from(appContext)
+        // 在广播到达时取快照，离线上传期间修改配置也不会改变这条短信的归属。
+        val simNumbers = app.container.simNumberStore.get()
 
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
@@ -34,8 +37,8 @@ class SmsReceiver : BroadcastReceiver() {
                 val sender = parts.first().displayOriginatingAddress.orEmpty()
                 val body = parts.joinToString(separator = "") { it.displayMessageBody.orEmpty() }
                 val receivedAt = parts.minOf { it.timestampMillis }
-                val subscriptionId = intent.getIntExtra("subscription", -1).takeIf { it >= 0 }
-                val simSlot = intent.getIntExtra("slot", -1).takeIf { it >= 0 }
+                val subscriptionId = SmsSimMetadata.subscriptionId(intent)
+                val simSlot = SmsSimMetadata.slot(intent)
                 val clientMessageId = MessageFingerprint.create(
                     sender,
                     body,
@@ -43,7 +46,6 @@ class SmsReceiver : BroadcastReceiver() {
                     subscriptionId,
                 )
 
-                val app = SmsRelayApp.from(appContext)
                 // 先持久化再调度上传：即使此刻断网，消息仍可在稍后补传。
                 app.container.database.smsDao().insert(
                     SmsEntity(
@@ -53,6 +55,7 @@ class SmsReceiver : BroadcastReceiver() {
                         receivedAt = receivedAt,
                         subscriptionId = subscriptionId,
                         simSlot = simSlot,
+                        recipient = simNumbers.recipientFor(simSlot),
                     ),
                 )
                 UploadScheduler.enqueue(appContext)

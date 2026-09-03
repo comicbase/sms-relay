@@ -190,7 +190,7 @@ function LoginScreen({ client, onChangeConfig }) {
 }
 
 /** 登录后的主页面，负责查询、筛选、Realtime 订阅和短信详情。 */
-function Dashboard({ client, session, onChangeConfig }) {
+export function Dashboard({ client, session, onChangeConfig }) {
   const [messages, setMessages] = useState([])
   const [devices, setDevices] = useState({})
   const [loading, setLoading] = useState(true)
@@ -245,7 +245,7 @@ function Dashboard({ client, session, onChangeConfig }) {
     const normalized = query.trim().toLowerCase()
     return messages.filter((message) => {
       const matchesDevice = deviceFilter === 'all' || message.device_id === deviceFilter
-      const haystack = `${message.sender || ''} ${message.body || ''} ${devices[message.device_id] || ''}`.toLowerCase()
+      const haystack = `${message.sender || ''} ${message.recipient || ''} ${message.body || ''} ${devices[message.device_id] || ''}`.toLowerCase()
       return matchesDevice && (!normalized || haystack.includes(normalized))
     })
   }, [messages, query, deviceFilter, devices])
@@ -311,7 +311,7 @@ function Dashboard({ client, session, onChangeConfig }) {
                     {dayMessages.map((message) => (
                       <button className="message-row" key={message.id || `${message.device_id}-${message.client_message_id}`} onClick={() => setSelected(message)}>
                         <span className="sender-avatar">{senderInitial(message.sender)}</span>
-                        <span className="message-main"><span className="message-title"><strong>{message.sender || '未知号码'}</strong><em>{devices[message.device_id] || 'Android 手机'}</em></span><span className="message-preview">{message.body || '（空短信）'}</span></span>
+                        <span className="message-main"><span className="message-title"><strong>{message.sender || '未知号码'}</strong><em>{devices[message.device_id] || 'Android 手机'}</em></span><span className="message-preview">接收号码：{message.recipient || '未记录'}</span><span className="message-preview">{message.body || '（空短信）'}</span></span>
                         <span className="message-meta"><time>{TOKYO_TIME.format(new Date(message.received_at || message.created_at))}</time>{message.sim_slot != null && <small>SIM {Number(message.sim_slot) + 1}</small>}</span>
                         <ChevronRight className="row-arrow" size={18} />
                       </button>
@@ -341,6 +341,7 @@ function MessageDrawer({ message, deviceName, onClose }) {
       <aside className="drawer" role="dialog" aria-modal="true" aria-label="短信详情">
         <div className="drawer-head"><div><span className="eyebrow">短信详情</span><h2>{message.sender || '未知号码'}</h2></div><button className="icon-button" onClick={onClose} aria-label="关闭"><X size={20} /></button></div>
         <div className="detail-meta">
+          <div><Smartphone size={17} /><span><small>接收号码</small><strong>{message.recipient || '未记录（旧短信、未配置或卡槽未知）'}</strong></span></div>
           <div><Clock3 size={17} /><span><small>接收时间（JST）</small><strong>{formatFullTime(message.received_at || message.created_at)}</strong></span></div>
           <div><Smartphone size={17} /><span><small>来源设备</small><strong>{deviceName || 'Android 手机'}{message.sim_slot != null ? ` · SIM ${Number(message.sim_slot) + 1}` : ''}</strong></span></div>
         </div>
