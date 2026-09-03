@@ -129,7 +129,7 @@ Vite 中以 `VITE_` 开头的变量会进入浏览器构建产物，因此只能
 
 ## 8. 开启 Realtime
 
-接收号码功能需先执行 [Supabase 迁移 SQL](../supabase/migrations/20260903_add_sms_recipient.sql)，并在新版 Android App 的 **SIM 号码** 中配置对应卡槽。旧短信、未配置号码或未知卡槽会显示“未记录”。网页兼容旧记录中缺少 `recipient` 的情况，不会根据设备当前配置倒填历史接收号码。
+请按 [Android README 第 6 节](../android/README.md#6-supabase-准备)创建 Supabase 数据表，完整建表 SQL 已包含接收号码 `recipient`；已有旧版项目的补充字段说明也在该节，无需另外的迁移文件。然后按该文档第 7.2 节，在 Android App 的 **SIM 号码** 中配置对应卡槽。旧短信、未配置号码或未知卡槽会显示“未记录”。网页兼容旧记录中缺少 `recipient` 的情况，不会根据设备当前配置倒填历史接收号码。
 
 本地 UI 测试：运行 `npm run dev -- --host 127.0.0.1` 后访问 `/tests/recipient-preview.html`。该页面复用实际 Dashboard，使用虚构的双卡、缺失字段和 NULL 记录，不连接 Supabase；可检查接收号码搜索、列表和详情。默认生产构建不会包含此测试页面。
 

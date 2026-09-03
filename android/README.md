@@ -1,6 +1,6 @@
 # SmsRelay Android 教学案例
 
-SmsRelay 是一个面向 Android 初学者的完整案例：手机收到新短信后，应用通过系统广播取得短信，先保存到本地 Room 数据库，再由 WorkManager 上传到 Supabase。即使暂时断网，短信也不会因为一次上传失败而丢失。
+SmsRelay 是一个面向 Android 初学者的完整案例：先在 App 中为 SIM 卡配置接收手机号；手机收到新短信后，应用通过系统广播取得短信，按接收卡槽匹配号码，先保存到本地 Room 数据库，再由 WorkManager 上传到 Supabase。远程网页可以查看发送号码、接收号码和短信内容。即使暂时断网，短信也不会因为一次上传失败而丢失。
 
 > 本项目用于学习 Android 广播、运行时权限、本地数据库、后台任务和云端数据同步。短信属于高度敏感数据，请只处理本人设备和本人有权处理的数据。
 
@@ -10,6 +10,7 @@ SmsRelay 是一个面向 Android 初学者的完整案例：手机收到新短�
 
 - 如何在 Manifest 中声明 `BroadcastReceiver`。
 - 如何申请 `RECEIVE_SMS` 运行时权限。
+- 如何保存每张 SIM 卡的号码配置，并区分发送号码、接收号码和卡槽标识。
 - 如何用 Room 实现“单一数据源”和响应式界面。
 - 为什么可靠的同步应该“先写本地，再上传云端”。
 - 如何用 WorkManager 处理联网约束、退避和失败重试。
@@ -28,22 +29,11 @@ SmsRelay 是一个面向 Android 初学者的完整案例：手机收到新短�
 - 断网后通过 WorkManager 自动补传。
 - 在 Compose 界面显示本地短信及上传状态。
 - 支持在应用内配置 Project URL 和 Publishable Key。
+- 为 SIM 1 / SIM 2 手动配置手机号，新短信保存并上传接收号码 `recipient`。
 
 本应用不需要成为系统默认短信应用，也不会读取安装前的短信收件箱。
 
-### 接收号码设置与升级
-
-1. 已有 Supabase 项目先在 SQL Editor 执行 [recipient 迁移](../supabase/migrations/20260903_add_sms_recipient.sql)，新增可空的 `sms_messages.recipient` 列；不改动原有 RLS。
-2. 安装新版 App（正式版升级须使用原来的签名），本地 Room 会从 v1 自动迁移到 v2，保留旧短信和上传队列。不要卸载旧版或清除数据。
-3. 点击 App 右上角 **SIM 号码**，按照系统 SIM 管理中的卡槽填写 SIM 1 / SIM 2 的手机号。单卡只填实际使用的卡槽，不使用的卡槽留空。
-4. 号码格式为 3–15 位数字，可带 `+` 国际区号，不带空格或横线。此设置无需额外的读取电话号码权限，也不会自动验证号码属于该卡。
-5. 新短信按广播中的卡槽匹配号码，并在接收时保存快照。以后修改号码、换卡或补传离线短信都不会改变旧记录的 `recipient`。
-
-卡槽使用零基索引（`0` 对应 SIM 1、`1` 对应 SIM 2），优先读取标准 `android.telephony.extra.SLOT_INDEX`，兼容旧 `slot` 字段。卡槽缺失、不支持或号码未填写时保存 `NULL`，不猜测号码。换卡、移动卡槽或切换 eSIM 后须手动更新配置。当前界面支持两个逻辑卡槽。
-
-旧短信接收时没有号码快照，因此升级后仍为空，在 App 和网页显示“未记录”。先迁移云端表再升级 App；若遗漏迁移，含 `recipient` 的上传会失败，但本地短信仍保留，完成迁移后点击“立即同步”补传。
-
-验收建议：分别向两张 SIM 发送测试短信，核对本机与 Supabase 的 `sim_slot` 和 `recipient`；断网接收后改配置再联网，确认补传仍使用接收时的旧号码。网页列表、详情和搜索都支持接收号码。
+首次搭建按第 6–8 节依次完成建表、配置和真机测试即可，完整建表 SQL 已包含接收号码字段。已有旧版项目只需参考第 6.4 节补充字段，不要重新建表。
 
 ## 3. 整体架构
 
@@ -79,10 +69,13 @@ app/src/main/
     │   ├── ConfigStore.kt              # Supabase 公开配置
     │   ├── DeviceIdentity.kt           # 稳定的本机 UUID
     │   ├── MessageFingerprint.kt       # 短信幂等指纹
+    │   ├── SimNumberStore.kt           # SIM 1 / SIM 2 号码配置与校验
     │   ├── local/                       # Room Entity、DAO、Database
     │   ├── remote/SupabaseClient.kt    # Auth、刷新令牌和 REST 上传
     │   └── session/SessionStore.kt     # Keystore 加密会话
-    ├── receiver/SmsReceiver.kt         # 接收 SMS_RECEIVED
+    ├── receiver/
+    │   ├── SmsReceiver.kt             # 接收 SMS_RECEIVED 并保存号码快照
+    │   └── SmsSimMetadata.kt          # 解析订阅 ID 与 SIM 卡槽
     ├── worker/                          # WorkManager 调度与上传
     └── ui/main/                         # Compose 界面和 ViewModel
 ```
@@ -91,14 +84,16 @@ app/src/main/
 
 ### 5.1 接收短信
 
-系统收到短信后发送 `android.provider.Telephony.SMS_RECEIVED`。`SmsReceiver` 使用 `goAsync()` 延长广播处理窗口，然后在 IO 协程中：
+系统收到短信后发送 `android.provider.Telephony.SMS_RECEIVED`。`SmsReceiver` 使用 `goAsync()` 延长广播处理窗口，并在广播到达时读取 SIM 号码配置快照，然后在 IO 协程中：
 
 1. 从 Intent 还原一个或多个 `SmsMessage`。
 2. 合并多段短信正文。
 3. 提取发送方、接收时间、订阅 ID 和 SIM 卡槽。
-4. 计算消息指纹。
-5. 写入 Room。
+4. 根据卡槽从配置快照中取得接收号码 `recipient`。
+5. 计算消息指纹，将短信与接收号码一起写入 Room。
 6. 调度上传任务。
+
+卡槽使用零基索引（`0` 对应 SIM 1、`1` 对应 SIM 2），优先读取标准 `android.telephony.extra.SLOT_INDEX`，兼容旧 `slot` 字段。卡槽缺失、不支持或号码未填写时，接收号码保存为 `NULL`，不猜测归属。
 
 `SMS_RECEIVED` 属于 Android 后台隐式广播限制的例外，因此可以在 Manifest 中静态声明。但 OEM 系统仍可能加入额外的省电限制。
 
@@ -142,6 +137,8 @@ sender + body + receivedAt + subscriptionId
 
 这种设计的优点是：界面展示的是 Room 中的真实状态，而不是依赖一次网络请求的临时结果。
 
+上传使用短信在接收时保存的 `recipient`，而不是上传时重新读取 SIM 配置。因此，离线期间修改号码不会改变已接收短信的号码；历史短信也不会根据当前配置倒填。
+
 ### 5.4 登录会话
 
 邮箱和密码只用于调用 Supabase Auth。应用不保存密码，只保存访问令牌、刷新令牌和过期时间。会话 JSON 使用 Android Keystore 中生成的 AES-GCM 密钥加密后，再存入 SharedPreferences。
@@ -152,9 +149,9 @@ sender + body + receivedAt + subscriptionId
 
 在 Supabase Dashboard 的 Authentication 页面创建邮箱密码用户。Android 应用和远程网页使用同一个普通用户登录。
 
-### 6.2 示例数据表与 RLS
+### 6.2 创建完整数据表与 RLS
 
-下面是与本项目字段匹配的教学示例。请在新项目的 SQL Editor 中执行；已有项目应先比较结构，不要重复创建。
+下面是可从零搭建本案例的完整建表和权限 SQL，已包含 `recipient`。请在新项目的 SQL Editor 中执行一次，无需另外执行迁移文件；已有项目不要重复创建表或策略，参见第 6.4 节。
 
 ```sql
 create table public.devices (
@@ -169,8 +166,8 @@ create table public.sms_messages (
   user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
   device_id uuid not null references public.devices(id) on delete cascade,
   client_message_id text not null,
-  sender text not null,
-  recipient text,
+  sender text not null,             -- 发送号码，由短信广播提供
+  recipient text,                   -- 接收号码，由 App 按 SIM 卡槽配置保存；允许为空
   body text not null,
   received_at timestamptz not null,
   subscription_id integer,
@@ -178,6 +175,9 @@ create table public.sms_messages (
   created_at timestamptz not null default now(),
   unique (device_id, client_message_id)
 );
+
+comment on column public.sms_messages.recipient is
+  '接收时按 SIM 卡槽配置保存的手机号；未配置或卡槽未知时为空。';
 
 alter table public.devices enable row level security;
 alter table public.sms_messages enable row level security;
@@ -211,7 +211,35 @@ with check (
 
 如果远程网页需要自动出现新短信，还要在 Database → Publications 中把 `sms_messages` 加入 `supabase_realtime`。Android 上传本身不依赖 Realtime。
 
+### 6.3 理解短信的号码与归属字段
+
+| 云端字段 | 来源与用途 |
+| --- | --- |
+| `sender` | 发送号码，由系统短信广播提供，不是本机号码。 |
+| `recipient` | 接收手机号，由用户在 App 中配置，在短信接收时按卡槽保存。使用 `text` 保留 `+` 和前导零；允许为空。 |
+| `sim_slot` | 接收卡槽，`0` 对应 SIM 1，`1` 对应 SIM 2；系统未提供时为空。 |
+| `subscription_id` | Android 的 SIM 订阅标识，不是手机号，也不能直接当作卡槽序号。 |
+| `device_id` | 接收短信的设备 UUID，关联 `devices` 表。 |
+
+本地 Room 对应保存 `recipient`，上传时使用同名字段。用户权限仍由 RLS 控制，新增接收号码不改变数据访问范围。
+
+### 6.4 已有旧版项目的升级说明
+
+首次搭建已执行第 6.2 节的读者可跳过本节。若旧项目的 `sms_messages` 尚无 `recipient`，只在 SQL Editor 执行以下 SQL，不删除表、不重建 RLS，也不需要单独的迁移文件：
+
+```sql
+alter table public.sms_messages add column if not exists recipient text;
+comment on column public.sms_messages.recipient is
+  '接收时按 SIM 卡槽配置保存的手机号；未配置或卡槽未知时为空。';
+```
+
+先补充云端字段，再用原签名覆盖安装新版 App。本地 Room 会自动从 v1 迁移到 v2，保留旧短信和上传队列；不要卸载旧版或清除数据。旧短信没有接收时的号码快照，升级后仍为空，界面显示“未记录”。
+
+如果先升级 App、却遗漏云端字段，携带 `recipient` 的上传会失败；本地短信仍保留，补充字段后点击“立即同步”即可重试。
+
 ## 7. 配置应用
+
+### 7.1 配置 Supabase 并登录
 
 推荐首次启动时在应用界面填写：
 
@@ -232,6 +260,17 @@ SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_key
 ```
 
 `supabase.properties` 已加入 `.gitignore`。Publishable Key 可以放在客户端，但它必须与 RLS 一起使用。绝对不要把 `service_role`、Secret Key、数据库密码或用户密码写进 APK。
+
+保存配置后，使用第 6.1 节创建的普通 Auth 用户登录。
+
+### 7.2 配置每张 SIM 卡的接收号码
+
+1. 在手机系统的 SIM 管理中确认实际使用的卡槽。
+2. 点击 App 右上角 **SIM 号码**，分别填写 SIM 1 / SIM 2 的手机号。单卡只填写实际使用的卡槽，其余留空。
+3. 号码使用 3–15 位数字，可带 `+` 国际区号，不带空格或横线，点击“保存”。
+4. 换卡、移动卡槽或切换 eSIM 后，重新核对并更新对应配置。
+
+当前界面支持两个逻辑卡槽。号码由用户手动填写，无需额外读取电话号码的权限，App 也不会自动验证号码属于该卡。设置只对之后收到的短信生效；留空或无法识别卡槽时显示“未记录”。
 
 ## 8. 构建与运行
 
@@ -267,15 +306,18 @@ SMS_RELAY_KEY_PASSWORD=your_key_password \
 
 产物位于 `app/build/outputs/apk/release/app-release.apk`。签名文件必须安全、长期备份；丢失原签名后，已经安装的应用将无法通过新 APK 原位升级。签名文件、密码和 Release APK 都已由仓库 `.gitignore` 排除，安装包应通过 GitHub Releases 等发布渠道分发。
 
-首次测试步骤：
+### 8.2 首次真机测试
 
-1. 安装并启动应用。
+1. 完成第 6 节的 Supabase 建表，安装并启动应用。
 2. 授予“短信”权限。
 3. 填写 Supabase 公开配置。
 4. 使用普通 Auth 用户登录。
-5. 从另一部手机发送一条全新的短信。
-6. 检查本地列表和上传状态。
-7. 在 Supabase `sms_messages` 表中确认新增记录。
+5. 按第 7.2 节填写 SIM 号码并保存。
+6. 从另一部手机向已配置的号码发送一条全新的运营商 SMS；双卡分别测试。
+7. 检查 App 中的接收号码、SIM 卡槽和“已上传”状态。
+8. 在 Supabase `sms_messages` 表中确认新增记录，核对 `recipient`、`sim_slot`；网页列表、详情和搜索应能使用对应接收号码。
+
+离线测试：断网接收一条短信，随后修改 SIM 号码配置，再联网同步。该条短信应继续使用接收时的旧号码，新配置仅作用于之后收到的短信。课堂演示请使用测试号码和虚构短信内容。
 
 ## 9. 真机调试
 
@@ -331,13 +373,14 @@ Greezer Denial: sending SMS_RECEIVED ... process cached
 - 会话令牌使用 Keystore 加密。
 - 云端表必须启用 RLS。
 - 前端和 APK 都不能包含 `service_role` Key。
+- 接收手机号同样属于个人信息，受短信表的 RLS 保护，不应写入公开日志、截图或源码。
 - 课堂演示应使用测试号码和虚构短信。
 
 ## 12. 可安排的课程练习
 
 1. 给 `MessageFingerprint` 增加更多边界测试。
 2. 在界面中增加“仅显示上传失败”的筛选项。
-3. 为 Room 增加版本 2 字段并编写 Migration。
+3. 阅读已有的 Room v1 → v2 接收号码迁移测试，再尝试增加一个可空字段，升级到 v3 并编写 Migration。
 4. 给上传 Worker 增加结构化日志和失败分类。
 5. 使用假的 Supabase 客户端编写 ViewModel 单元测试。
 6. 比较“直接网络上传”和“离线优先队列”在断网时的差异。
@@ -347,5 +390,6 @@ Greezer Denial: sending SMS_RECEIVED ... process cached
 - 只接收获得权限之后到达的新短信。
 - 只监听传统 SMS；网络短信、5G 消息和 RCS 不保证产生 `SMS_RECEIVED`。
 - OEM 后台策略可能影响广播及时性。
+- 接收号码依赖用户正确配置与系统提供的卡槽信息，不保证自动识别本机手机号。
 - 该 MVP 没有读取、删除或回复系统短信。
 - 调试 APK 不应用于正式分发；正式版本需要独立包名、签名、隐私政策和完整安全审计。
