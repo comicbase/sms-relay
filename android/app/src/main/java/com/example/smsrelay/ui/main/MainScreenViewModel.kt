@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 /** 页面渲染所需的不可变快照。Compose 只消费状态，不直接访问数据库。 */
 data class MainUiState(
@@ -21,6 +23,11 @@ data class MainUiState(
     val messages: List<SmsEntity> = emptyList(),
     val status: String? = null,
     val simNumbers: SimNumbers = SimNumbers(),
+    val localCount: Int = 0,
+    val pendingCount: Int = 0,
+    val page: Int = 1,
+    val hasNextPage: Boolean = false,
+    val pageLoading: Boolean = true,
 )
 
 /** 把登录、配置和同步操作连接到 UI 状态。 */
@@ -33,14 +40,62 @@ class SmsRelayViewModel(private val container: AppContainer) : ViewModel() {
         ),
     )
     val state: StateFlow<MainUiState> = mutableState.asStateFlow()
+    private data class Cursor(val time: Long, val id: String)
+    private val cursors = mutableListOf<Cursor?>(null)
+    private var pageJob: Job? = null
+    private var pageGeneration = 0
 
     init {
-        // Room Flow 是短信列表的单一数据源；插入后无需手动“刷新界面”。
+        observePage()
+        // 总数在 SQL 中统计，不从当前页推算，也不读取其他页的正文。
         viewModelScope.launch {
-            container.database.smsDao().observeAll().collect { messages ->
-                mutableState.update { it.copy(messages = messages) }
+            container.database.smsDao().observeTotalCount().distinctUntilChanged().collect { count ->
+                mutableState.update { it.copy(localCount = count) }
             }
         }
+        viewModelScope.launch {
+            container.database.smsDao().observePendingCount().distinctUntilChanged().collect { count ->
+                mutableState.update { it.copy(pendingCount = count) }
+            }
+        }
+    }
+
+    private fun observePage() {
+        pageJob?.cancel()
+        val generation = ++pageGeneration
+        val cursor = cursors.last()
+        mutableState.update { it.copy(pageLoading = true, page = cursors.size) }
+        pageJob = viewModelScope.launch {
+            val dao = container.database.smsDao()
+            val rows = cursor?.let { dao.observePageBefore(it.time, it.id, PAGE_SIZE + 1) }
+                ?: dao.observeFirstPage(PAGE_SIZE + 1)
+            rows.collect { messages ->
+                if (generation == pageGeneration) mutableState.update {
+                    it.copy(messages = messages.take(PAGE_SIZE), hasNextPage = messages.size > PAGE_SIZE, pageLoading = false)
+                }
+            }
+        }
+    }
+
+    fun nextPage() {
+        val current = state.value
+        if (current.pageLoading || !current.hasNextPage) return
+        val last = current.messages.lastOrNull() ?: return
+        cursors.add(Cursor(last.receivedAt, last.clientMessageId))
+        observePage()
+    }
+
+    fun previousPage() {
+        if (state.value.pageLoading || cursors.size <= 1) return
+        cursors.removeAt(cursors.lastIndex)
+        observePage()
+    }
+
+    fun latestPage() {
+        if (state.value.pageLoading) return
+        cursors.clear()
+        cursors.add(null)
+        observePage()
     }
 
     fun login(email: String, password: String) {
@@ -113,6 +168,7 @@ class SmsRelayViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     companion object {
+        const val PAGE_SIZE = 20
         fun factory(container: AppContainer): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")

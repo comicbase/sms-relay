@@ -11,8 +11,8 @@ import androidx.room.PrimaryKey
 @Entity(
     tableName = "received_sms",
     indices = [
-        Index(value = ["receivedAt"]),
-        Index(value = ["uploadedAt"]),
+        Index(value = ["receivedAt", "clientMessageId"]),
+        Index(value = ["uploadedAt", "receivedAt", "clientMessageId"]),
     ],
 )
 data class SmsEntity(

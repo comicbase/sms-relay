@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import {
   Check,
   ChevronRight,
@@ -21,6 +21,8 @@ import {
   X,
 } from 'lucide-react'
 import { clearConfig, getSavedConfig, makeClient, saveConfig, validateConfig } from './supabase.js'
+import { useInbox } from './useInbox.js'
+import { PAGE_SIZE } from './inboxData.js'
 
 const TOKYO_TIME = new Intl.DateTimeFormat('zh-CN', {
   timeZone: 'Asia/Tokyo',
@@ -191,74 +193,21 @@ function LoginScreen({ client, onChangeConfig }) {
 
 /** 登录后的主页面，负责查询、筛选、Realtime 订阅和短信详情。 */
 export function Dashboard({ client, session, onChangeConfig }) {
-  const [messages, setMessages] = useState([])
-  const [devices, setDevices] = useState({})
-  const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
-  const [error, setError] = useState('')
-  const [query, setQuery] = useState('')
-  const [deviceFilter, setDeviceFilter] = useState('all')
+  const { messages, devices, loading, error, query, setQuery, deviceFilter, setDeviceFilter,
+    page, hasNext, next, previous, refresh, stats, statsError, realtime, hasNew, lastUpdated } = useInbox(client)
   const [selected, setSelected] = useState(null)
-  const [realtime, setRealtime] = useState('connecting')
-  const [lastUpdated, setLastUpdated] = useState(null)
-
-  const loadMessages = useCallback(async (quiet = false) => {
-    // 两个查询可以并行执行；RLS 会在数据库端过滤当前用户无权查看的行。
-    quiet ? setRefreshing(true) : setLoading(true)
-    setError('')
-    const [messageResult, deviceResult] = await Promise.all([
-      client.from('sms_messages').select('*').order('received_at', { ascending: false }).limit(500),
-      client.from('devices').select('id,name'),
-    ])
-    if (messageResult.error) setError(messageResult.error.message)
-    else {
-      setMessages(messageResult.data || [])
-      setLastUpdated(new Date())
-    }
-    if (!deviceResult.error) {
-      setDevices(Object.fromEntries((deviceResult.data || []).map((device) => [device.id, device.name || '未命名设备'])))
-    }
-    setLoading(false)
-    setRefreshing(false)
-  }, [client])
-
-  useEffect(() => {
-    // 首次进入 Dashboard 时加载当前快照。
-    loadMessages()
-  }, [loadMessages])
-
-  useEffect(() => {
-    // Realtime 只发送“发生了新增”的信号；收到后复用完整查询，保持排序和设备映射一致。
-    const channel = client
-      .channel('smsrelay-web-live')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'sms_messages' }, () => loadMessages(true))
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') setRealtime('live')
-        else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') setRealtime('error')
-        else setRealtime('connecting')
-      })
-    return () => { client.removeChannel(channel) }
-  }, [client, loadMessages])
-
-  // 搜索和设备筛选完全在浏览器内完成，不会为每次键盘输入发起网络请求。
-  const filtered = useMemo(() => {
-    const normalized = query.trim().toLowerCase()
-    return messages.filter((message) => {
-      const matchesDevice = deviceFilter === 'all' || message.device_id === deviceFilter
-      const haystack = `${message.sender || ''} ${message.recipient || ''} ${message.body || ''} ${devices[message.device_id] || ''}`.toLowerCase()
-      return matchesDevice && (!normalized || haystack.includes(normalized))
-    })
-  }, [messages, query, deviceFilter, devices])
 
   const grouped = useMemo(() => {
-    return filtered.reduce((result, message) => {
+    return messages.reduce((result, message) => {
       const date = new Date(message.received_at || message.created_at)
       const key = TOKYO_DAY.format(date)
       if (!result[key]) result[key] = []
       result[key].push(message)
       return result
     }, {})
-  }, [filtered])
+  }, [messages])
+
+  useEffect(() => { document.querySelector('.inbox-card')?.scrollIntoView({ block: 'nearest' }) }, [page])
 
   const logout = async () => client.auth.signOut()
   const reset = async () => {
@@ -267,15 +216,13 @@ export function Dashboard({ client, session, onChangeConfig }) {
     onChangeConfig()
   }
 
-  const todayCount = messages.filter((message) => isTodayInTokyo(message.received_at || message.created_at)).length
-
   return (
     <div className="app-shell">
       <header className="topbar">
         <Brand />
         <div className="top-actions">
           <span className={`live-pill ${realtime}`}><span />{realtime === 'live' ? '实时连接' : realtime === 'error' ? '实时连接异常' : '正在连接'}</span>
-          <button className="icon-button" onClick={() => loadMessages(true)} disabled={refreshing} aria-label="刷新"><RefreshCw className={refreshing ? 'spin' : ''} size={18} /></button>
+          <button className="icon-button" onClick={refresh} disabled={loading && !error} aria-label="刷新"><RefreshCw className={loading ? 'spin' : ''} size={18} /></button>
           <div className="account-chip"><span>{session.user.email?.slice(0, 1).toUpperCase()}</span><div><small>当前账号</small><strong>{session.user.email}</strong></div></div>
           <button className="icon-button" onClick={logout} aria-label="退出登录"><LogOut size={18} /></button>
         </div>
@@ -285,15 +232,16 @@ export function Dashboard({ client, session, onChangeConfig }) {
         <section className="dashboard-head">
           <div><p className="kicker">MESSAGE CENTER</p><h1>短信收件箱</h1><p>所有时间均以日本标准时间（JST）显示</p></div>
           <div className="summary-row">
-            <div className="summary-card"><span className="summary-icon amber"><Inbox size={20} /></span><div><strong>{messages.length}</strong><small>全部短信</small></div></div>
-            <div className="summary-card"><span className="summary-icon green"><Signal size={20} /></span><div><strong>{todayCount}</strong><small>今日收到</small></div></div>
+            <div className="summary-card"><span className="summary-icon amber"><Inbox size={20} /></span><div><strong>{stats?.total ?? '—'}</strong><small>全部短信</small></div></div>
+            <div className="summary-card"><span className="summary-icon green"><Signal size={20} /></span><div><strong>{stats?.today ?? '—'}</strong><small>今日收到</small></div></div>
             <div className="summary-card"><span className="summary-icon blue"><Smartphone size={20} /></span><div><strong>{Object.keys(devices).length}</strong><small>已连接设备</small></div></div>
           </div>
         </section>
+        <p className="stats-note" role="status">{statsError ? `统计更新失败：${friendlyDataError(statsError)}` : stats ? `全库统计于 ${TOKYO_TIME.format(stats.updatedAt)}，每分钟更新；不受筛选条件影响。` : '正在读取全库统计…'}</p>
 
         <section className="inbox-card">
           <div className="inbox-toolbar">
-            <div className="search-box"><Search size={18} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索号码、内容或设备…" aria-label="搜索短信" />{query && <button onClick={() => setQuery('')} aria-label="清空搜索"><X size={16} /></button>}</div>
+            <div className="search-box"><Search size={18} /><input value={query} onChange={(e) => setQuery(e.target.value)} maxLength={120} placeholder="全库搜索号码、内容或设备…" aria-label="搜索短信" />{query && <button onClick={() => setQuery('')} aria-label="清空搜索"><X size={16} /></button>}</div>
             <select value={deviceFilter} onChange={(e) => setDeviceFilter(e.target.value)} aria-label="按设备筛选">
               <option value="all">全部设备</option>
               {Object.entries(devices).map(([id, name]) => <option value={id} key={id}>{name}</option>)}
@@ -301,8 +249,9 @@ export function Dashboard({ client, session, onChangeConfig }) {
             <span className="updated-at">{lastUpdated ? `更新于 ${TOKYO_TIME.format(lastUpdated)}` : '正在读取'}</span>
           </div>
 
-          {error && <div className="load-error"><CircleAlert size={18} /><span><strong>无法读取短信</strong>{friendlyDataError(error)}</span><button onClick={() => loadMessages()}>重试</button></div>}
-          {loading ? <MessageSkeleton /> : filtered.length === 0 ? <EmptyState hasQuery={Boolean(query || deviceFilter !== 'all')} /> : (
+          {hasNew && <button className="new-message-notice" onClick={refresh}>有新短信或连接已恢复，点击刷新列表</button>}
+          {error && <div className="load-error"><CircleAlert size={18} /><span><strong>无法读取短信</strong>{friendlyDataError(error)}</span><button onClick={refresh}>重试</button></div>}
+          {loading ? <MessageSkeleton /> : error ? null : messages.length === 0 ? <EmptyState hasQuery={Boolean(query || deviceFilter !== 'all' || page > 1)} /> : (
             <div className="message-groups">
               {Object.entries(grouped).map(([day, dayMessages]) => (
                 <section className="message-group" key={day}>
@@ -321,6 +270,12 @@ export function Dashboard({ client, session, onChangeConfig }) {
               ))}
             </div>
           )}
+          <nav className="pagination" aria-label="短信分页">
+            <button onClick={previous} disabled={page === 1 || loading}>上一页</button>
+            <span aria-live="polite">第 {page} 页 · 每页 {PAGE_SIZE} 条{!loading && !error ? ` · 本页 ${messages.length} 条` : ''}</span>
+            <button onClick={next} disabled={!hasNext || loading || Boolean(error)}>下一页</button>
+            <button onClick={refresh} disabled={loading && !error}>返回最新</button>
+          </nav>
         </section>
         <footer><button onClick={reset}><Settings size={14} /> 更换 Supabase 项目</button><span><Database size={14} /> 数据直接来自你的 Supabase 项目</span></footer>
       </main>
@@ -361,13 +316,6 @@ function senderInitial(sender) {
   if (!sender) return '?'
   const clean = sender.replace(/^\+/, '')
   return clean.slice(-2)
-}
-
-function isTodayInTokyo(value) {
-  if (!value) return false
-  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tokyo' }).format(new Date())
-  const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tokyo' }).format(new Date(value))
-  return today === day
 }
 
 function formatFullTime(value) {

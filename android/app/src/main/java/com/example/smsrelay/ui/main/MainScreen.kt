@@ -31,6 +31,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,6 +58,10 @@ import java.time.format.DateTimeFormatter
 fun MainScreen(viewModel: SmsRelayViewModel) {
     // lifecycle-aware 收集会在页面不可见时自动暂停，避免无意义地持续观察 UI 状态。
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val listState = rememberLazyListState()
+    LaunchedEffect(state.page, state.pageLoading) {
+        if (!state.pageLoading) listState.scrollToItem(0)
+    }
     val context = LocalContext.current
     var showSimSettings by rememberSaveable { mutableStateOf(false) }
     var hasSmsPermission by remember {
@@ -99,14 +105,14 @@ fun MainScreen(viewModel: SmsRelayViewModel) {
             } else if (!state.isSignedIn) {
                 LoginCard(
                     state.isBusy,
-                    state.messages.size,
+                    state.localCount,
                     viewModel::login,
                     viewModel::clearConfig,
                 )
             } else {
                 StatusPanel(
-                    localCount = state.messages.size,
-                    pendingCount = state.messages.count { it.uploadedAt == null },
+                    localCount = state.localCount,
+                    pendingCount = state.pendingCount,
                     onSync = { viewModel.sync(context) },
                     onLogout = viewModel::logout,
                 )
@@ -126,11 +132,20 @@ fun MainScreen(viewModel: SmsRelayViewModel) {
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(top = 12.dp, bottom = 8.dp),
             )
-            if (state.messages.isEmpty()) {
-                Text("尚未收到短信。授权后，新短信会先保存在本机。")
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = viewModel::previousPage, enabled = state.page > 1 && !state.pageLoading) { Text("上一页") }
+                Text("第 ${state.page} 页 · 每页 ${SmsRelayViewModel.PAGE_SIZE} 条", style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = viewModel::nextPage, enabled = state.hasNextPage && !state.pageLoading) { Text("下一页") }
+            }
+            if (state.page > 1) TextButton(onClick = viewModel::latestPage, enabled = !state.pageLoading) { Text("返回最新短信") }
+            if (state.pageLoading) {
+                CircularProgressIndicator()
+            } else if (state.messages.isEmpty()) {
+                Text(if (state.page == 1) "尚未收到短信。授权后，新短信会先保存在本机。" else "本页暂无短信，请返回最新短信。")
             } else {
                 LazyColumn(
-                    modifier = Modifier.fillMaxWidth(),
+                    state = listState,
+                    modifier = Modifier.fillMaxWidth().weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(state.messages, key = { it.clientMessageId }) { message ->

@@ -12,7 +12,7 @@
 - 理解 React 状态、Effect、Memo 和组件拆分。
 - 使用 Supabase JavaScript SDK 完成邮箱密码登录。
 - 理解 Publishable Key 与用户 Session 的不同职责。
-- 查询 Postgres 数据并在浏览器中搜索、筛选和分组。
+- 用游标分页查询 Postgres，并在服务器搜索、筛选和排序。
 - 使用 Realtime 监听 Postgres `INSERT` 事件。
 - 实现加载、空数据、错误和实时连接状态。
 - 将静态前端部署到 Vercel。
@@ -21,7 +21,8 @@
 
 - 首次配置 Supabase Project URL 和 Publishable Key。
 - Supabase Auth 邮箱密码登录与持久化会话。
-- 查询最近 500 条短信。
+- 每页查询 20 条短信，支持上一页、下一页和返回最新。
+- 在全库按发送号码、接收号码、正文或设备名称搜索。
 - 按号码、正文或设备名称搜索。
 - 显示并搜索接收号码 `recipient`（由 Android 在收到短信时按 SIM 配置保存）。
 - 按 Android 设备筛选。
@@ -47,7 +48,7 @@ sequenceDiagram
     DB-->>Web: 通过 RLS 过滤后的数据
 ```
 
-收到 Realtime 通知后，网页没有直接把事件 payload 塞进列表，而是重新查询一次。这样列表、设备映射、排序和 RLS 结果始终来自同一套查询逻辑，代码更容易理解。
+收到 Realtime 通知后，网页没有直接把事件 payload 塞进列表，而是合并短时间内的一批事件，并只重新查询当前需要的 21 条（20 条内容加 1 条下一页探针）。在历史页或搜索结果中只显示“有新短信”提示，避免用户阅读的位置突然改变。
 
 Realtime 只负责让网页“自动更新”。即使没有开启 Realtime，手动刷新仍能查询到已经上传的短信。
 
@@ -61,7 +62,9 @@ SmsRelayWeb/
 ├── .env.example            # 构建时公开配置示例
 └── src/
     ├── main.jsx            # 挂载 React 根组件
-    ├── App.jsx             # 配置、登录、收件箱和 Realtime
+    ├── App.jsx             # 配置、登录和收件箱界面
+    ├── useInbox.js         # 分页状态、统计、刷新和 Realtime
+    ├── inboxData.js        # 服务端查询、游标和搜索条件
     ├── supabase.js         # 配置存储、校验和客户端工厂
     └── styles.css          # 设计系统与响应式布局
 ```
@@ -140,7 +143,7 @@ Vite 中以 `VITE_` 开头的变量会进入浏览器构建产物，因此只能
 3. 确认 `sms_messages` 已加入 publication。
 4. 确认登录用户拥有该表的 SELECT RLS 权限。
 
-网页订阅代码位于 `Dashboard` 的第二个 `useEffect`：
+网页订阅代码位于 `useInbox.js`。回调只发出“数据变化”信号，短时间内的多条通知会合并成一次刷新：
 
 ```js
 client
@@ -148,7 +151,7 @@ client
   .on(
     'postgres_changes',
     { event: 'INSERT', schema: 'public', table: 'sms_messages' },
-    () => loadMessages(true),
+    () => changed(),
   )
   .subscribe()
 ```
@@ -165,7 +168,13 @@ Publishable Key 会随 JavaScript 下载到访问者浏览器，这是正常设�
 Publishable Key + 用户 Access Token + Postgres RLS Policy
 ```
 
-网页查询 `select('*')` 时，Supabase 会根据 Access Token 得到 `auth.uid()`，再由 RLS 过滤行。如果暂时关闭 RLS 来解决报错，就可能让所有访问者读取全部短信，这是不可接受的。
+网页只查询列表需要的字段，Supabase 会根据 Access Token 得到 `auth.uid()`，再由 RLS 过滤行。如果暂时关闭 RLS 来解决报错，就可能让所有访问者读取全部短信，这是不可接受的。
+
+### 9.1 分页与数据库索引
+
+列表按 `received_at DESC, id DESC` 使用游标分页，而不是 `OFFSET`。每次请求上限为 21 条，第 21 条只用来判断是否还有下一页，所以页面始终最多显示 20 条正文。即使多条短信时间相同，`id` 仍能提供稳定边界；新短信插入也不会让后续历史页发生重复或跳项。
+
+全库总数和今日数量使用只返回计数的 HEAD 请求，每分钟更新一次，不下载短信正文。精确计数本身仍有数据库成本。请执行 [Android README 第 6.5 节](../android/README.md#65-已有-supabase-项目的分页索引)中与实际归属字段相符的联合索引；包含搜索量大时，再评估可选的 `pg_trgm` 索引。索引能提高适配查询的速度，但会占存储并增加写入成本。
 
 ## 10. 生产构建
 
@@ -235,19 +244,19 @@ Vite 构建的资源地址从站点根路径 `/assets/` 开始，因此应使用
 
 ### `useState`
 
-保存会变化并影响界面的数据，例如登录 Session、短信列表、搜索词和连接状态。
+保存会变化并影响界面的数据，例如登录 Session、当前页短信、游标历史、搜索词和连接状态。
 
 ### `useEffect`
 
-处理 React 渲染之外的副作用。本项目用它恢复 Auth 会话、首次加载数据以及建立/清理 Realtime channel。
+处理 React 渲染之外的副作用。本项目用它恢复 Auth 会话、加载当前页和计数，以及建立/清理 Realtime channel。每次翻页或搜索都会取消已过期的请求，避免较慢的旧响应覆盖新结果。
 
 ### `useMemo`
 
-缓存由现有状态计算出的值，例如 Supabase 客户端、筛选结果和按日期分组的列表。它不是数据库缓存。
+缓存由现有状态计算出的值，例如 Supabase 客户端和当前页按日期分组的列表。搜索和设备筛选由服务器执行，不是在浏览器下载全库后筛选。
 
 ### `useCallback`
 
-保持 `loadMessages` 引用稳定，使 Realtime Effect 不会因为每次渲染都得到新函数而反复重建 channel。
+保持手动刷新等函数引用稳定，避免子组件和 Effect 因每次渲染得到新引用而重复工作。
 
 ## 13. 常见问题
 
@@ -287,10 +296,10 @@ Vite 构建的资源地址从站点根路径 `/assets/` 开始，因此应使用
 
 ## 15. 课程练习
 
-1. 将最多 500 条一次加载改为分页加载。
-2. 在 Realtime 回调中实现安全的增量更新，并处理重复事件。
+1. 比较游标分页与 `OFFSET` 分页在持续插入新短信时的差异。
+2. 观察 Realtime 一次推送多条事件时，合并刷新如何减少数据库请求。
 3. 增加按日期范围筛选和未读状态。
-4. 使用测试替身为配置校验和筛选函数编写单元测试。
+4. 扩展现有虚构数据测试，验证最后一页、请求失败和慢响应竞态。
 5. 增加 Error Boundary，比较它与普通请求错误状态的区别。
 6. 将 JST 改成用户可选时区并保存为浏览器偏好。
 

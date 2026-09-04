@@ -143,6 +143,12 @@ sender + body + receivedAt + subscriptionId
 
 邮箱和密码只用于调用 Supabase Auth。应用不保存密码，只保存访问令牌、刷新令牌和过期时间。会话 JSON 使用 Android Keystore 中生成的 AES-GCM 密钥加密后，再存入 SharedPreferences。
 
+### 5.5 每页 20 条与本地索引
+
+App 每页显示 20 条短信，提供上一页、下一页和返回最新短信。Room 每次最多查询 21 条（多取一条判断是否有下一页），不再把全部正文加载进内存。以 `receivedAt DESC, clientMessageId DESC` 排序并记录页尾游标，同一时间收到多条短信时也有确定顺序。阅读历史页时，新到的短信不会把当前页挤走；返回最新页即可查看。
+
+总数和待上传数用单独的 `COUNT(*)` 查询，不把本页条数当作总数。Room v3 新增 `(receivedAt, clientMessageId)` 和 `(uploadedAt, receivedAt, clientMessageId)` 联合索引，分别支持翻页和待上传队列。上传仍按每批最多 **50 条** 处理，与界面的 **20 条/页** 无关。精确计数仍有扫描成本，索引并不意味着无限数据量下耗时不变。
+
 ## 6. Supabase 准备
 
 ### 6.1 创建普通 Auth 用户
@@ -175,6 +181,13 @@ create table public.sms_messages (
   created_at timestamptz not null default now(),
   unique (device_id, client_message_id)
 );
+
+-- 按登录用户读取最新短信、按设备翻页；唯一约束不能替代这些排序索引。
+create index sms_messages_user_received_id_idx
+  on public.sms_messages (user_id, received_at desc, id desc);
+create index sms_messages_user_device_received_id_idx
+  on public.sms_messages (user_id, device_id, received_at desc, id desc);
+create index devices_user_idx on public.devices (user_id);
 
 comment on column public.sms_messages.recipient is
   '接收时按 SIM 卡槽配置保存的手机号；未配置或卡槽未知时为空。';
@@ -233,9 +246,66 @@ comment on column public.sms_messages.recipient is
   '接收时按 SIM 卡槽配置保存的手机号；未配置或卡槽未知时为空。';
 ```
 
-先补充云端字段，再用原签名覆盖安装新版 App。本地 Room 会自动从 v1 迁移到 v2，保留旧短信和上传队列；不要卸载旧版或清除数据。旧短信没有接收时的号码快照，升级后仍为空，界面显示“未记录”。
+先补充云端字段，再用原签名覆盖安装新版 App。本地 Room 会自动从 v1 → v2（接收号码）→ v3（分页索引），或从 v2 → v3，保留旧短信和上传队列；不要卸载旧版或清除数据。旧短信没有接收时的号码快照，升级后仍为空，界面显示“未记录”。
 
 如果先升级 App、却遗漏云端字段，携带 `recipient` 的上传会失败；本地短信仍保留，补充字段后点击“立即同步”即可重试。
+
+### 6.5 已有 Supabase 项目的分页索引
+
+先查看字段和索引，避免重复建立功能相同的索引。早期线上项目的归属列叫 `owner_id`，本教程新建表使用 `user_id`；两者不能直接混用，也不要为优化去重命名归属列或改动 RLS。
+
+```sql
+select table_name, column_name from information_schema.columns
+where table_schema = 'public' and table_name in ('devices', 'sms_messages')
+  and column_name in ('user_id', 'owner_id');
+select tablename, indexname, indexdef from pg_indexes
+where schemaname = 'public' and tablename in ('devices', 'sms_messages');
+```
+
+如果尚无对应联合索引，执行以下 SQL。示例针对归属列为 `owner_id` 的早期项目；若上面检查结果为 `user_id`，将三条语句里的 `owner_id` 替换成 `user_id`。如果两张表命名不同，要分别按各自字段修改。每条单独执行，不包在事务中；`CONCURRENTLY` 可以减少建索引对持续上传的影响。`IF NOT EXISTS` 只检查索引名称，不能识别不同名称的等价索引。新项目执行过第 6.2 节则无需重复创建。
+
+```sql
+create index concurrently if not exists sms_messages_owner_received_id_idx
+  on public.sms_messages (owner_id, received_at desc, id desc);
+```
+
+```sql
+create index concurrently if not exists sms_messages_owner_device_received_id_idx
+  on public.sms_messages (owner_id, device_id, received_at desc, id desc);
+```
+
+```sql
+create index concurrently if not exists devices_owner_idx on public.devices (owner_id);
+```
+
+#### 可选：全库包含搜索索引
+
+网页现在在服务器搜索号码和正文。数据量大且经常搜索时，可启用 `pg_trgm`，为三个搜索字段增加 GIN 索引。索引会占空间并增加写入成本；很短的关键词或匹配范围很大的搜索仍可能较慢，并不能保证每次查询都会使用索引。先用 Supabase Query Performance / Index Advisor 检查实际查询，再决定是否添加。
+
+```sql
+create extension if not exists pg_trgm with schema extensions;
+-- 检查扩展实际安装位置；以下示例假定结果为 extensions。
+select extnamespace::regnamespace from pg_extension where extname = 'pg_trgm';
+```
+
+若结果不是 `extensions`，把以下 `extensions.gin_trgm_ops` 的前缀替换为实际 schema。以下每条分别执行：
+
+```sql
+create index concurrently if not exists sms_messages_sender_trgm_idx
+  on public.sms_messages using gin (sender extensions.gin_trgm_ops);
+```
+
+```sql
+create index concurrently if not exists sms_messages_recipient_trgm_idx
+  on public.sms_messages using gin (recipient extensions.gin_trgm_ops);
+```
+
+```sql
+create index concurrently if not exists sms_messages_body_trgm_idx
+  on public.sms_messages using gin (body extensions.gin_trgm_ops);
+```
+
+这些 SQL 仅增加索引，不删除短信，也不放宽访问权限。修改 README 或更新网页不会自动在云端执行它们。参考：[Supabase 索引指南](https://supabase.com/docs/guides/database/postgres/indexes)、[PostgreSQL pg_trgm](https://www.postgresql.org/docs/current/pgtrgm.html)。
 
 ## 7. 配置应用
 
@@ -380,7 +450,7 @@ Greezer Denial: sending SMS_RECEIVED ... process cached
 
 1. 给 `MessageFingerprint` 增加更多边界测试。
 2. 在界面中增加“仅显示上传失败”的筛选项。
-3. 阅读已有的 Room v1 → v2 接收号码迁移测试，再尝试增加一个可空字段，升级到 v3 并编写 Migration。
+3. 阅读已有的 Room v1 → v2 → v3 迁移测试，再尝试增加一个可空字段，升级到 v4 并编写 Migration。
 4. 给上传 Worker 增加结构化日志和失败分类。
 5. 使用假的 Supabase 客户端编写 ViewModel 单元测试。
 6. 比较“直接网络上传”和“离线优先队列”在断网时的差异。

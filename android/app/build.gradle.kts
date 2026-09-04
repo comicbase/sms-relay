@@ -37,8 +37,8 @@ android {
         minSdk = 26
         targetSdk = 36
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
         buildConfigField("String", "SUPABASE_URL", "\"${configString("SUPABASE_URL")}\"")
         buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"${configString("SUPABASE_PUBLISHABLE_KEY")}\"")
     }

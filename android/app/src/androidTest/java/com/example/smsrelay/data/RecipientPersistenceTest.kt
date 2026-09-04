@@ -18,7 +18,7 @@ class RecipientPersistenceTest {
     @Test fun migrationPreservesOldMessagesAndNewRecipients() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val name = "recipient-migration-test-${System.nanoTime()}.db"
-        // 重建 v1 字段与索引；打开 v2 时 Room 同时检查迁移后的 schema。
+        // 重建 v1 字段与索引；打开 v3 时 Room 同时检查整条迁移链后的 schema。
         context.openOrCreateDatabase(name, Context.MODE_PRIVATE, null).use { db ->
             db.execSQL("CREATE TABLE received_sms (clientMessageId TEXT NOT NULL PRIMARY KEY, sender TEXT NOT NULL, body TEXT NOT NULL, receivedAt INTEGER NOT NULL, subscriptionId INTEGER, simSlot INTEGER, uploadedAt INTEGER, lastUploadError TEXT)")
             db.execSQL("CREATE INDEX index_received_sms_receivedAt ON received_sms(receivedAt)")
@@ -27,7 +27,7 @@ class RecipientPersistenceTest {
             db.version = 1
         }
         val database = Room.databaseBuilder(context, SmsDatabase::class.java, name)
-            .addMigrations(SmsDatabase.MIGRATION_1_2).build()
+            .addMigrations(SmsDatabase.MIGRATION_1_2, SmsDatabase.MIGRATION_2_3).build()
         try {
             val old = database.smsDao().pending().single()
             assertNull(old.recipient)
