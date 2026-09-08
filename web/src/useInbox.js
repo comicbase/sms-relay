@@ -15,7 +15,6 @@ export function useInbox(client) {
   const [stats, setStats] = useState(null)
   const [statsError, setStatsError] = useState('')
   const [realtime, setRealtime] = useState('connecting')
-  const [hasNew, setHasNew] = useState(false)
   const [lastUpdated, setLastUpdated] = useState(null)
   const [reload, setReload] = useState(0)
   const [manualReload, setManualReload] = useState(0)
@@ -91,15 +90,13 @@ export function useInbox(client) {
     let disposed = false
     const changed = () => {
       if (disposed) return
-      setHasNew(true)
-      // 一批事件只排一次刷新；历史页/搜索结果只提示，不挪动用户当前阅读位置。
+      // 一批事件只排一次刷新；历史页/搜索结果不挪动用户当前阅读位置。
       if (timer) return
       timer = setTimeout(() => {
         timer = null
         const state = latest.current
         if (document.visibilityState !== 'hidden' && state.page === 1 && !state.query && !state.searching) {
           setReload((n) => n + 1)
-          setHasNew(false)
         }
       }, 1500)
     }
@@ -119,7 +116,6 @@ export function useInbox(client) {
   const refresh = useCallback(() => {
     setLoading(true)
     setCursors([null])
-    setHasNew(false)
     setManualReload((n) => n + 1)
   }, [])
   const next = () => {
@@ -134,5 +130,5 @@ export function useInbox(client) {
   }
   return { query, setQuery, deviceFilter: filter.device, setDeviceFilter, devices: devices || {}, messages,
     page, hasNext, next, previous, refresh, loading: loading || searching, error: error || deviceError,
-    stats, statsError, realtime, hasNew, lastUpdated }
+    stats, statsError, realtime, lastUpdated }
 }

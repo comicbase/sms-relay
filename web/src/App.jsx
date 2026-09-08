@@ -194,7 +194,7 @@ function LoginScreen({ client, onChangeConfig }) {
 /** 登录后的主页面，负责查询、筛选、Realtime 订阅和短信详情。 */
 export function Dashboard({ client, session, onChangeConfig }) {
   const { messages, devices, loading, error, query, setQuery, deviceFilter, setDeviceFilter,
-    page, hasNext, next, previous, refresh, stats, statsError, realtime, hasNew, lastUpdated } = useInbox(client)
+    page, hasNext, next, previous, refresh, stats, statsError, realtime, lastUpdated } = useInbox(client)
   const [selected, setSelected] = useState(null)
 
   const grouped = useMemo(() => {
@@ -249,7 +249,6 @@ export function Dashboard({ client, session, onChangeConfig }) {
             <span className="updated-at">{lastUpdated ? `更新于 ${TOKYO_TIME.format(lastUpdated)}` : '正在读取'}</span>
           </div>
 
-          {hasNew && <button className="new-message-notice" onClick={refresh}>有新短信或连接已恢复，点击刷新列表</button>}
           {error && <div className="load-error"><CircleAlert size={18} /><span><strong>无法读取短信</strong>{friendlyDataError(error)}</span><button onClick={refresh}>重试</button></div>}
           {loading ? <MessageSkeleton /> : error ? null : messages.length === 0 ? <EmptyState hasQuery={Boolean(query || deviceFilter !== 'all' || page > 1)} /> : (
             <div className="message-groups">
