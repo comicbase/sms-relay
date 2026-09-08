@@ -88,6 +88,7 @@ export function useInbox(client) {
   useEffect(() => {
     let timer
     let disposed = false
+    let subscribedOnce = false
     const changed = () => {
       if (disposed) return
       // 一批事件只排一次刷新；历史页/搜索结果不挪动用户当前阅读位置。
@@ -105,8 +106,11 @@ export function useInbox(client) {
       .subscribe((status) => {
         if (disposed) return
         setRealtime(status === 'SUBSCRIBED' ? 'live' : ['CHANNEL_ERROR', 'TIMED_OUT'].includes(status) ? 'error' : 'connecting')
-        // 补齐首次查询到订阅之间的空隙，也补齐断线重连期间的消息。
-        if (status === 'SUBSCRIBED') changed()
+        // 首次订阅不重复查询；只有断线后再次订阅成功才补查可能错过的消息。
+        if (status === 'SUBSCRIBED') {
+          if (subscribedOnce) changed()
+          subscribedOnce = true
+        }
       })
     const visible = () => { if (document.visibilityState !== 'hidden') changed() }
     document.addEventListener('visibilitychange', visible)
